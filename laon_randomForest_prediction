@@ -1,0 +1,54 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+from pyspark.ml.feature import StringIndexer, VectorAssembler, StandardScaler
+from pyspark.ml.classification import RandomForestClassifier
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+from pyspark.ml import Pipeline
+import matplotlib.pyplot as plt
+import os
+
+os.environ["PYSPARK_PYTHON"]="python"
+os.environ["PYSPARK_DRIVER_PYTHON"]="python"
+
+spark = SparkSession.builder.appName("CreditScorePrediction").getOrCreate()
+
+data = spark.read.csv("C:/Users/Lenovo/Desktop/customer_financial_data.csv", header=True, inferSchema=True)
+for c in data.columns:
+    data = data.withColumnRenamed(c, c.strip().replace(" ", "_").lower())
+data = data.na.fill(0)
+
+categorical_cols = ["income_range", "loan_type"]
+indexers = [StringIndexer(inputCol=c, outputCol=c + "_index") for c in categorical_cols]
+
+feature_cols = ["income_range_index", "loan_type_index", "age", "loan_amount", "repayment_amount", "balance"]
+assembler = VectorAssembler(inputCols=feature_cols, outputCol="features_unscaled")
+scaler = StandardScaler(inputCol="features_unscaled", outputCol="features")
+
+label_indexer = StringIndexer(inputCol="credit_score_category", outputCol="label")
+rf = RandomForestClassifier(labelCol="label", featuresCol="features", numTrees=60)
+
+pipeline = Pipeline(stages=indexers + [assembler, scaler, label_indexer, rf])
+
+train_data, test_data = data.randomSplit([0.8, 0.2], seed=42)
+
+model = pipeline.fit(train_data)
+predictions = model.transform(test_data)
+
+e1 = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
+e2 = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="precisionByLabel")
+e3 = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="recallByLabel")
+e4 = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="f1")
+
+print("Accuracy:", e1.evaluate(predictions))
+print("Precision:", e2.evaluate(predictions))
+print("Recall:", e3.evaluate(predictions))
+print("F1-Score:", e4.evaluate(predictions))
+
+importances = model.stages[-1].featureImportances.toArray()
+plt.figure(figsize=(7,5))
+plt.barh(feature_cols, importances)
+plt.xlabel("Importance")
+plt.ylabel("Features")
+plt.title("Feature Importance")
+plt.tight_layout()
+plt.show()
